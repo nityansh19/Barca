@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Barça",
+    "slug": "barca",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "plugins": [
+      "expo-notifications"
+    ]
+  }
+}
