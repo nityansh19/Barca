@@ -1,11 +1,4 @@
-import { demoFixtures } from '../../../shared/demo';
+import { dashboardResponse } from '../../../server/dashboard';
 export function GET() {
-  return Response.json(
-    {
-      mode: 'demo',
-      source: 'Illustrative sample data',
-      fixtures: demoFixtures,
-    },
-    { headers: { 'Cache-Control': 'no-store' } },
-  );
+  return dashboardResponse(({ players: _players, ...feed }) => feed);
 }

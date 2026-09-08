@@ -3,23 +3,30 @@ export type Fixture = {
   opponent: string;
   code: string;
   home: boolean;
-  competition: 'La Liga' | 'Champions League' | 'Copa del Rey';
+  competition: string;
   kickoff: string | null;
   stadium: string;
-  status: 'scheduled' | 'postponed' | 'cancelled' | 'finished';
+  status:
+    | 'scheduled'
+    | 'postponed'
+    | 'cancelled'
+    | 'finished'
+    | 'live'
+    | 'interrupted'
+    | 'unknown';
   score?: [number, number];
 };
 export type Player = {
   id: string;
   name: string;
-  number: number;
+  number: number | null;
   position: 'Goalkeeper' | 'Defender' | 'Midfielder' | 'Forward';
   availability: 'Available' | 'Injured' | 'Doubtful' | 'Suspended' | 'Unknown';
   nationality: string;
-  appearances: number;
-  goals: number;
-  assists: number;
-  minutes: number;
+  appearances: number | null;
+  goals: number | null;
+  assists: number | null;
+  minutes: number | null;
 };
 export type Preferences = {
   matchDay: boolean;

@@ -1,4 +1,4 @@
 import { dashboardResponse } from '../../../server/dashboard';
 export function GET() {
-  return dashboardResponse(({ fixtures: _fixtures, ...feed }) => feed);
+  return dashboardResponse();
 }

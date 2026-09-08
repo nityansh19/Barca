@@ -2,7 +2,20 @@
 
 An independent FC Barcelona fan companion for the web, Android and iOS. Not affiliated with FC Barcelona.
 
-## Current milestone: working demo foundation
+## Current milestone: v0.2 — connected data layer and fan tools
+
+- Web dashboard loads a shared API with loading, retry and stale-data states.
+- Accent-insensitive fixture/player search, current competition filters and newest-first results.
+- Favourite players saved per device on web and mobile.
+- Shareable web match/player links and calendar downloads.
+- Local-time reminder preview with daylight-saving handling; no scheduled delivery yet.
+- API-Football fixtures/current-squad adapter ready for a server-side key.
+- Durable D1 feed cache with refresh leasing, backoff and an explicit stale-data limit.
+- 24 automated tests covering provider normalization, SQLite cache behaviour, calendar encoding and reminder timing.
+
+See [live-data setup](docs/LIVE_DATA_SETUP.md) for credentials, caching, mobile API access and remaining limitations.
+
+### Foundation retained
 
 - Responsive web dashboard with countdown and local kickoff times.
 - Fixtures/results with competition filters and match detail dialogs.
@@ -13,7 +26,7 @@ An independent FC Barcelona fan companion for the web, Android and iOS. Not affi
 - Shared football models and sample data; read-only demo API routes.
 - Pure reminder engine with tests for rescheduling, postponements, time zones, retry windows and deduplication.
 
-**This is not a live service yet.** All fixtures and statistics are samples. Player availability is explicitly unknown. Automatic match alerts, confirmed lineups, live scores, verified injuries and account sync are not connected. The notification buttons send a test only; changing preferences does not schedule future notifications.
+**The published app remains in demo mode because no API key is configured.** Fixtures and statistics are samples and availability is unknown. Once configured, the new adapter supplies real fixtures and current squad membership hourly; player statistics, verified injuries, confirmed lineups and minute-by-minute scores remain unconnected. Automatic push delivery and account sync are not implemented. Notification buttons send a single test only; preferences and reminder previews do not schedule future notifications.
 
 ## Run the website
 
@@ -64,7 +77,7 @@ mobile/               Expo Android/iOS application
 docs/                 Architecture and implementation roadmap
 ```
 
-API endpoints: `GET /api/health`, `GET /api/fixtures`, `GET /api/squad`. Every data endpoint returns `mode: "demo"` and an explicit source label. The first UI milestone imports the same sample module directly; both clients will move to the shared API when a live provider is connected.
+API endpoints: `GET /api/health`, `GET /api/dashboard`, `GET /api/fixtures`, `GET /api/squad` and `GET /api/calendar`. Feed endpoints expose source, mode and freshness. The web UI consumes `/api/dashboard`; mobile consumes it when `EXPO_PUBLIC_API_URL` is configured, otherwise it uses an explicit built-in demo. Calendar export supports optional `fixture` and `minutes` query parameters.
 
 The browser optionally exposes `navigate_barca` through WebMCP. It only navigates between screens and does not enable notifications. Unsupported browsers continue normally.
 

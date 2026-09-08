@@ -9,13 +9,17 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { demoFixtures, demoPlayers, officialLinks } from '../shared/demo';
+import { officialLinks } from '../shared/demo';
+import { useMobileFeed } from './use-feed';
+import { searchText, sortedFixtures } from '../shared/feed';
+import { planReminders } from '../shared/reminder-plan';
 import {
   defaultPreferences,
   parsePreferences,
@@ -41,6 +45,12 @@ export default function App() {
 }
 function Companion() {
   const [tab, setTab] = useState<(typeof tabs)[number]>('Home');
+  const { feed, error, loading, refresh } = useMobileFeed();
+  const fixtures = sortedFixtures(feed?.fixtures ?? []);
+  const players = feed?.players ?? [];
+  const [query, setQuery] = useState('');
+  const [favourites, setFavourites] = useState<string[]>([]);
+  const [favouritesOnly, setFavouritesOnly] = useState(false);
   const [prefs, setPrefs] = useState(defaultPreferences);
   const [ready, setReady] = useState(false);
   const [player, setPlayer] = useState<Player | null>(null);
@@ -50,6 +60,15 @@ function Companion() {
       .then((v) => setPrefs(parsePreferences(v ? JSON.parse(v) : null)))
       .catch(() => {})
       .finally(() => setReady(true));
+    AsyncStorage.getItem('barca.favourites.v1')
+      .then((v) => {
+        const ids = JSON.parse(v ?? '[]');
+        if (Array.isArray(ids))
+          setFavourites(
+            ids.filter((id): id is string => typeof id === 'string'),
+          );
+      })
+      .catch(() => {});
     const id = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(id);
   }, []);
@@ -59,9 +78,29 @@ function Companion() {
         Alert.alert('Settings', 'Could not save settings on this device.'),
       );
   }, [prefs, ready]);
-  const next = demoFixtures.find(
+  const next = fixtures.find(
     (f) => f.status === 'scheduled' && f.kickoff && Date.parse(f.kickoff) > now,
   );
+  const preview = planReminders(
+    fixtures,
+    prefs,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+    new Date(now),
+  ).slice(0, 4);
+  const filteredPlayers = players.filter(
+    (p) =>
+      (!favouritesOnly || favourites.includes(p.id)) &&
+      searchText(p.name).includes(searchText(query)),
+  );
+  function toggleFavourite(id: string) {
+    const updated = favourites.includes(id)
+      ? favourites.filter((p) => p !== id)
+      : [...favourites, id];
+    setFavourites(updated);
+    AsyncStorage.setItem('barca.favourites.v1', JSON.stringify(updated)).catch(
+      () => Alert.alert('Could not save favourite players'),
+    );
+  }
   async function testNotification() {
     try {
       if (Platform.OS === 'android')
@@ -101,10 +140,55 @@ function Companion() {
         <Text style={s.meta}>FAN COMPANION</Text>
       </View>
       <ScrollView contentContainerStyle={s.content}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={loading}
+          onPress={() => {
+            void refresh();
+          }}
+        >
+          <Text style={s.noticeText}>
+            {loading ? 'Refreshing…' : '↻ Refresh data'}
+          </Text>
+        </Pressable>
+        {!!error && <Text style={s.noticeText}>{error}</Text>}
+        {(tab === 'Matches' || tab === 'Squad') && (
+          <TextInput
+            accessibilityLabel={
+              tab === 'Matches' ? 'Search opponents' : 'Search players'
+            }
+            placeholder={
+              tab === 'Matches' ? 'Search an opponent…' : 'Search players…'
+            }
+            placeholderTextColor="#a2b2cb"
+            style={[s.card, s.text]}
+            value={query}
+            onChangeText={setQuery}
+          />
+        )}
+        {tab === 'Squad' && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: favouritesOnly }}
+            onPress={() => setFavouritesOnly((v) => !v)}
+          >
+            <Text style={s.noticeText}>
+              {favouritesOnly
+                ? '★ Favourite players only'
+                : '☆ Show favourite players'}
+            </Text>
+          </Pressable>
+        )}
         <Text style={s.title}>{tab === 'Home' ? 'Visca el Barça.' : tab}</Text>
         <View style={s.notice}>
           <Text style={s.noticeText}>
-            DEMO · Sample fixtures and stats. Availability unverified.
+            {feed?.mode === 'demo'
+              ? 'DEMO · Sample fixtures and stats. Availability unverified.'
+              : feed?.stale
+                ? 'SAVED FEED · Provider update unavailable.'
+                : feed
+                  ? 'API-Football · Fixtures and squad synced hourly.'
+                  : 'Loading the football feed…'}
           </Text>
         </View>
         {tab === 'Home' && (
@@ -122,7 +206,7 @@ function Companion() {
               <Text style={s.text}>
                 {next?.kickoff
                   ? new Date(next.kickoff).toLocaleString()
-                  : 'No upcoming dated demo fixture.'}
+                  : 'No upcoming dated fixture.'}
               </Text>
               <Text style={s.muted}>{next?.stadium}</Text>
               <Pressable
@@ -134,14 +218,14 @@ function Companion() {
               </Pressable>
             </View>
             <Text style={s.sectionTitle}>Squad spotlight</Text>
-            {demoPlayers.slice(0, 3).map((p) => (
+            {players.slice(0, 3).map((p) => (
               <Pressable
                 style={s.row}
                 key={p.id}
                 onPress={() => setPlayer(p)}
                 accessibilityRole="button"
               >
-                <Text style={s.number}>{p.number}</Text>
+                <Text style={s.number}>{p.number ?? '—'}</Text>
                 <View style={s.flex}>
                   <Text style={s.name}>{p.name}</Text>
                   <Text style={s.muted}>{p.position}</Text>
@@ -152,29 +236,33 @@ function Companion() {
           </>
         )}
         {tab === 'Matches' &&
-          demoFixtures.map((f) => (
-            <View style={s.card} key={f.id}>
-              <Text style={s.meta}>
-                {f.competition.toUpperCase()} · {f.home ? 'HOME' : 'AWAY'}
-              </Text>
-              <Text style={s.sectionTitle}>
-                Barcelona {f.home ? 'vs' : 'at'} {f.opponent}
-              </Text>
-              <Text style={s.text}>
-                {f.kickoff
-                  ? new Date(f.kickoff).toLocaleString()
-                  : 'Kickoff TBC'}
-              </Text>
-              <Text style={s.muted}>{f.stadium}</Text>
-              {f.score && (
-                <Text style={s.score}>
-                  {prefs.spoilerFree ? 'Score hidden' : f.score.join(' – ')}
+          fixtures
+            .filter((f) => searchText(f.opponent).includes(searchText(query)))
+            .map((f) => (
+              <View style={s.card} key={f.id}>
+                <Text style={s.meta}>
+                  {f.competition.toUpperCase()} · {f.home ? 'HOME' : 'AWAY'}
                 </Text>
-              )}
-            </View>
-          ))}
+                <Text style={s.sectionTitle}>
+                  Barcelona {f.home ? 'vs' : 'at'} {f.opponent}
+                </Text>
+                <Text style={s.text}>
+                  {f.kickoff
+                    ? new Date(f.kickoff).toLocaleString()
+                    : 'Kickoff TBC'}
+                </Text>
+                <Text style={s.muted}>
+                  {f.stadium} · {f.status}
+                </Text>
+                {f.score && (
+                  <Text style={s.score}>
+                    {prefs.spoilerFree ? 'Score hidden' : f.score.join(' – ')}
+                  </Text>
+                )}
+              </View>
+            ))}
         {tab === 'Squad' &&
-          demoPlayers.map((p) => (
+          filteredPlayers.map((p) => (
             <Pressable
               style={s.row}
               key={p.id}
@@ -258,6 +346,28 @@ function Companion() {
             </Pressable>
           </View>
         )}
+        {tab === 'Reminders' && (
+          <View style={s.card}>
+            <Text style={s.sectionTitle}>Your reminder preview</Text>
+            <Text style={s.muted}>
+              Nothing is scheduled. These are{' '}
+              {feed?.mode === 'demo' ? 'illustrative' : 'planned'} local times.
+            </Text>
+            {preview.map((r) => (
+              <View key={r.fixtureId + r.kind}>
+                <Text style={s.text}>{r.opponent}</Text>
+                <Text style={s.muted}>
+                  {r.kind} · {new Date(r.at).toLocaleString()}
+                </Text>
+              </View>
+            ))}
+            {!preview.length && (
+              <Text style={s.muted}>
+                No future reminders with these settings.
+              </Text>
+            )}
+          </View>
+        )}
         <Text style={s.footer}>
           Independent fan project. Not affiliated with FC Barcelona.
         </Text>
@@ -267,7 +377,10 @@ function Companion() {
           <Pressable
             key={t}
             style={[s.tab, tab === t && s.activeTab]}
-            onPress={() => setTab(t)}
+            onPress={() => {
+              setTab(t);
+              setQuery('');
+            }}
             accessibilityRole="tab"
             accessibilityState={{ selected: t === tab }}
           >
@@ -290,18 +403,38 @@ function Companion() {
               <Text style={s.primaryText}>Close profile</Text>
             </Pressable>
             <Text style={s.title}>{player?.name}</Text>
+            {player && (
+              <Pressable
+                style={s.primary}
+                accessibilityRole="button"
+                accessibilityState={{
+                  selected: favourites.includes(player.id),
+                }}
+                onPress={() => toggleFavourite(player.id)}
+              >
+                <Text style={s.primaryText}>
+                  {favourites.includes(player.id)
+                    ? '★ Favourite player'
+                    : '☆ Add to favourites'}
+                </Text>
+              </Pressable>
+            )}
             <Text style={s.text}>
               #{player?.number} · {player?.position} · {player?.nationality}
             </Text>
             <Text style={s.noticeText}>
-              Availability unknown · illustrative statistics
+              Availability unknown ·{' '}
+              {feed?.mode === 'demo'
+                ? 'illustrative statistics'
+                : 'statistics not connected'}
             </Text>
             <View style={s.card}>
               <Text style={s.score}>
-                {player?.goals} goals · {player?.assists} assists
+                {player?.goals ?? '—'} goals · {player?.assists ?? '—'} assists
               </Text>
               <Text style={s.text}>
-                {player?.appearances} appearances · {player?.minutes} minutes
+                {player?.appearances ?? '—'} appearances ·{' '}
+                {player?.minutes ?? '—'} minutes
               </Text>
             </View>
             <Text style={s.muted}>

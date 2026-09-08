@@ -17,7 +17,10 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { demoFixtures, demoPlayers, officialLinks } from '../shared/demo';
+import { officialLinks } from '../shared/demo';
+import { filterFixtures, sortedFixtures, searchText } from '../shared/feed';
+import { planReminders } from '../shared/reminder-plan';
+import { useDashboard } from './use-dashboard';
 import {
   defaultPreferences,
   parsePreferences,
@@ -55,6 +58,17 @@ function Badge({ code, barca = false }: { code: string; barca?: boolean }) {
 
 export default function FanApp() {
   const [view, setView] = useState<View>('Home');
+  const { feed, error: feedError, loading, refresh } = useDashboard();
+  const fixtures = sortedFixtures(feed?.fixtures ?? []);
+  const players = feed?.players ?? [];
+  const [query, setQuery] = useState('');
+  const [favourites, setFavourites] = useState<string[]>([]);
+  const [onlyFavourites, setOnlyFavourites] = useState(false);
+  const [actionMessage, setActionMessage] = useState('');
+  const lastResult = [...fixtures]
+    .reverse()
+    .find((f) => f.status === 'finished');
+  const isDemo = feed?.mode === 'demo';
   const [zone, setZone] = useState('UTC');
   const [now, setNow] = useState<number | null>(null);
   const [preferences, setPreferences] =
@@ -76,6 +90,17 @@ export default function FanApp() {
     setZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
     setNow(Date.now());
     try {
+      const saved = JSON.parse(
+        localStorage.getItem('barca.favourites.v1') ?? '[]',
+      );
+      if (Array.isArray(saved))
+        setFavourites(
+          saved.filter((id): id is string => typeof id === 'string'),
+        );
+    } catch {
+      /* Local preference only. */
+    }
+    try {
       setPreferences(
         parsePreferences(
           JSON.parse(localStorage.getItem(storageKey) ?? 'null'),
@@ -91,7 +116,7 @@ export default function FanApp() {
     if (selectedMatch || selectedPlayer) dialog.current?.showModal();
     else dialog.current?.close();
   }, [selectedMatch, selectedPlayer]);
-  const upcoming = demoFixtures.filter(
+  const upcoming = fixtures.filter(
     (f) =>
       f.status === 'scheduled' &&
       (!f.kickoff || now === null || Date.parse(f.kickoff) > now),
@@ -124,6 +149,7 @@ export default function FanApp() {
   function closeDetails() {
     setSelectedMatch(null);
     setSelectedPlayer(null);
+    history.replaceState(null, '', location.pathname + location.search);
   }
   async function testNotification() {
     if (!('Notification' in window) || !('serviceWorker' in navigator)) {
@@ -192,13 +218,95 @@ export default function FanApp() {
       </button>
     );
   }
-  const filteredMatches = demoFixtures.filter(
-    (f) =>
-      (matchTab === 'Results'
-        ? f.status === 'finished'
-        : f.status !== 'finished') &&
-      (competition === 'All competitions' || competition === f.competition),
+  const filteredMatches = filterFixtures(fixtures, {
+    tab: matchTab,
+    competition,
+    query,
+  });
+  const visiblePlayers = players.filter(
+    (p) =>
+      (position === 'All players' || p.position === position) &&
+      (!onlyFavourites || favourites.includes(p.id)) &&
+      searchText(p.name).includes(searchText(query.trim())),
   );
+  const reminderPreview =
+    now === null
+      ? []
+      : planReminders(fixtures, preferences, zone, new Date(now)).slice(0, 5);
+  useEffect(() => {
+    if (!feed) return;
+    const openHash = () => {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      const match = feed.fixtures.find((f) => f.id === params.get('match'));
+      const player = feed.players.find((p) => p.id === params.get('player'));
+      if (match) {
+        setSelectedPlayer(null);
+        setSelectedMatch(match);
+      } else if (player) {
+        setSelectedMatch(null);
+        setSelectedPlayer(player);
+      } else if (params.has('match') || params.has('player'))
+        setActionMessage('This shared item is not in the current feed.');
+    };
+    openHash();
+    window.addEventListener('hashchange', openHash);
+    return () => window.removeEventListener('hashchange', openHash);
+  }, [feed]);
+  function toggleFavourite(id: string) {
+    const next = favourites.includes(id)
+      ? favourites.filter((p) => p !== id)
+      : [...favourites, id];
+    setFavourites(next);
+    try {
+      localStorage.setItem('barca.favourites.v1', JSON.stringify(next));
+      setActionMessage('Favourite players saved on this device.');
+    } catch {
+      setActionMessage(
+        'Favourite changed for this session; device storage is unavailable.',
+      );
+    }
+  }
+  async function shareDetails() {
+    const url = new URL(window.location.href);
+    url.hash = selectedMatch
+      ? 'match=' + encodeURIComponent(selectedMatch.id)
+      : 'player=' + encodeURIComponent(selectedPlayer?.id ?? '');
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setActionMessage('Link copied.');
+    } catch {
+      setActionMessage('Copy this link: ' + url.toString());
+    }
+  }
+  async function downloadCalendar(fixtureId?: string) {
+    setActionMessage('Preparing calendar…');
+    try {
+      const params = new URLSearchParams({
+        minutes: String(preferences.minutesBefore),
+      });
+      if (fixtureId) params.set('fixture', fixtureId);
+      const response = await fetch('/api/calendar?' + params);
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error ?? 'Calendar export failed.');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = isDemo ? 'barca-demo.ics' : 'barca-matches.ics';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setActionMessage(
+        isDemo
+          ? 'Demo calendar downloaded. It contains sample matches and no alarms.'
+          : 'Calendar downloaded. Imported events do not update automatically when kickoff changes.',
+      );
+    } catch (e) {
+      setActionMessage(
+        e instanceof Error ? e.message : 'Calendar export failed.',
+      );
+    }
+  }
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">
@@ -219,6 +327,8 @@ export default function FanApp() {
               onClick={() => {
                 setView(name);
                 setMessage('');
+                setQuery('');
+                setActionMessage('');
               }}
             >
               <Icon size={20} />
@@ -266,16 +376,74 @@ export default function FanApp() {
                         : 'Around the club.'}
               </h1>
             </div>
-            <span className="season-pill">2026 / 27</span>
-          </div>
-          <div className="demo-notice">
-            <span className="demo-dot" />
-            <strong>Demo preview</strong>
-            <span>
-              Fixtures and statistics are illustrative. Player availability is
-              unverified.
+            <span className="season-pill">
+              {feed
+                ? feed.season + ' / ' + String(feed.season + 1).slice(-2)
+                : 'Loading…'}
             </span>
           </div>
+          <div className="feed-toolbar">
+            <div className="demo-notice">
+              <span className="demo-dot" />
+              <strong>
+                {loading && !feed
+                  ? 'Loading feed'
+                  : isDemo
+                    ? 'Demo preview'
+                    : feed?.stale
+                      ? 'Saved feed'
+                      : feed
+                        ? 'Provider connected'
+                        : 'Feed unavailable'}
+              </strong>
+              <span>
+                {feed?.notices[0] ?? 'Loading fixtures and the squad…'}
+              </span>
+            </div>
+            <button
+              className="secondary-button"
+              disabled={loading}
+              onClick={() => {
+                void refresh();
+              }}
+            >
+              {loading ? 'Refreshing…' : 'Refresh data'}
+            </button>
+          </div>
+          {feed && (
+            <p className="feed-meta">
+              {feed.source} ·{' '}
+              {isDemo
+                ? 'Sample season'
+                : 'Updated ' + when(feed.fetchedAt, zone)}
+            </p>
+          )}
+          {feedError && (
+            <div role="alert" className="error-banner">
+              {feedError}
+              {feed ? ' The screen shows the last loaded data.' : ''}
+            </div>
+          )}
+          <output className="action-message">{actionMessage}</output>
+          {(view === 'Matches' || view === 'Squad') && (
+            <label className="search-label">
+              <span className="sr-only">
+                Search{' '}
+                {view === 'Matches' ? 'opponents or competitions' : 'players'}
+              </span>
+              <input
+                className="search-input"
+                type="search"
+                placeholder={
+                  view === 'Matches'
+                    ? 'Search opponent or competition…'
+                    : 'Search a player…'
+                }
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
+          )}
           {view === 'Home' && (
             <>
               <div className="dashboard-grid">
@@ -313,7 +481,7 @@ export default function FanApp() {
                         <div className="countdown">
                           {countdown.map((n, i) => (
                             <div key={i}>
-                              <strong>{n}</strong>
+                              <strong>{n ?? '—'}</strong>
                               <small>{['DAYS', 'HRS', 'MINS'][i]}</small>
                             </div>
                           ))}
@@ -329,7 +497,7 @@ export default function FanApp() {
                     </>
                   ) : (
                     <div className="empty-state">
-                      No upcoming dated demo fixture. Visit Matches for fixtures
+                      No upcoming dated fixture. Visit Matches for fixtures
                       awaiting a kickoff time.
                     </div>
                   )}
@@ -337,24 +505,30 @@ export default function FanApp() {
                 <aside className="right-stack">
                   <section className="panel result-card">
                     <p className="eyebrow">
-                      LAST TIME OUT <span>DEMO</span>
+                      LAST TIME OUT <span>{isDemo ? 'DEMO' : 'RESULT'}</span>
                     </p>
-                    <div className="result">
-                      <span>BAR</span>
-                      <strong>
-                        {preferences.spoilerFree ? '•••' : '3 – 1'}
-                      </strong>
-                      <span>VAL</span>
-                    </div>
-                    <p>
-                      La Liga <span>·</span> Full-time
-                    </p>
-                    <button
-                      className="text-link"
-                      onClick={() => setSelectedMatch(demoFixtures[4])}
-                    >
-                      Match details <ArrowRight size={16} />
-                    </button>
+                    {lastResult ? (
+                      <>
+                        <div className="result">
+                          <span>BAR</span>
+                          <strong>
+                            {preferences.spoilerFree
+                              ? '•••'
+                              : (lastResult.score?.join(' – ') ?? '—')}
+                          </strong>
+                          <span>{lastResult.code}</span>
+                        </div>
+                        <p>{lastResult.competition} · Full-time</p>
+                        <button
+                          className="text-link"
+                          onClick={() => setSelectedMatch(lastResult)}
+                        >
+                          Match details <ArrowRight size={16} />
+                        </button>
+                      </>
+                    ) : (
+                      <p>No completed matches in this feed.</p>
+                    )}
                   </section>
                   <section className="reminder-card">
                     <div className="bell-tile">
@@ -401,20 +575,24 @@ export default function FanApp() {
                       View squad <ArrowUpRight size={16} />
                     </button>
                   </div>
-                  {demoPlayers.slice(0, 3).map((p) => (
+                  {players.slice(0, 3).map((p) => (
                     <button
                       className="spotlight-row"
                       key={p.id}
                       onClick={() => setSelectedPlayer(p)}
                     >
-                      <span className="shirt-number">{p.number}</span>
+                      <span className="shirt-number">{p.number ?? '—'}</span>
                       <span>
                         <strong>{p.name}</strong>
                         <small>{p.position}</small>
                       </span>
                       <span className="player-contribution">
-                        <strong>{p.goals + p.assists}</strong>
-                        <small>G + A · demo</small>
+                        <strong>
+                          {p.goals === null || p.assists === null
+                            ? '—'
+                            : p.goals + p.assists}
+                        </strong>
+                        <small>G + A {isDemo ? '· demo' : ''}</small>
                       </span>
                     </button>
                   ))}
@@ -426,7 +604,7 @@ export default function FanApp() {
             <section className="panel">
               <div className="section-heading">
                 <div className="segmented">
-                  {['Upcoming', 'Results'].map((t) => (
+                  {['Upcoming', 'Live', 'Results'].map((t) => (
                     <button
                       key={t}
                       className={matchTab === t ? 'selected' : ''}
@@ -444,19 +622,37 @@ export default function FanApp() {
                 >
                   {[
                     'All competitions',
-                    'La Liga',
-                    'Champions League',
-                    'Copa del Rey',
+                    ...new Set(fixtures.map((f) => f.competition)),
                   ].map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>
               </div>
+              <button
+                className="secondary-button calendar-button"
+                disabled={
+                  !feed ||
+                  feed.stale ||
+                  !!feedError ||
+                  !upcoming.some((f) => f.kickoff)
+                }
+                onClick={() => {
+                  void downloadCalendar();
+                }}
+              >
+                {isDemo
+                  ? 'Download demo calendar'
+                  : 'Download upcoming matches'}
+              </button>
+              <p className="feed-meta">
+                One-time calendar export.{' '}
+                {isDemo
+                  ? 'Sample matches; no reminder alarms.'
+                  : 'Kickoff changes do not update imported events.'}
+              </p>
               {filteredMatches.map(fixtureRow)}
               {!filteredMatches.length && (
-                <p className="empty-state">
-                  No demo matches in this competition yet.
-                </p>
+                <p className="empty-state">No matches match these filters.</p>
               )}
               <p className="timezone">
                 <Clock3 size={14} />
@@ -468,7 +664,9 @@ export default function FanApp() {
             <>
               <div className="section-heading">
                 <p className="muted">
-                  Sample player profiles · season statistics
+                  {isDemo
+                    ? 'Sample player profiles · season statistics'
+                    : 'Current registered squad · missing data shown as —'}
                 </p>
                 <select
                   aria-label="Filter players by position"
@@ -486,42 +684,53 @@ export default function FanApp() {
                   ))}
                 </select>
               </div>
+              <div className="favourite-filter">
+                <button
+                  className="secondary-button"
+                  aria-pressed={onlyFavourites}
+                  onClick={() => setOnlyFavourites((v) => !v)}
+                >
+                  {onlyFavourites
+                    ? '★ Favourites only'
+                    : '☆ Show favourite players'}
+                </button>
+                <span>{favourites.length} saved on this device</span>
+              </div>
+              {!visiblePlayers.length && (
+                <p className="empty-state">
+                  No players match these filters. Open a player profile to add a
+                  favourite.
+                </p>
+              )}
               <div className="player-grid">
-                {demoPlayers
-                  .filter(
-                    (p) =>
-                      position === 'All players' || p.position === position,
-                  )
-                  .map((p) => (
-                    <button
-                      className="player-card"
-                      key={p.id}
-                      onClick={() => setSelectedPlayer(p)}
-                    >
-                      <div className="player-art">
-                        <span>{p.number}</span>
-                        <Shield size={40} strokeWidth={1} />
-                      </div>
-                      <div className="player-info">
-                        <span className="eyebrow">{p.position}</span>
-                        <h2>{p.name}</h2>
-                        <span className="status-pill">
-                          Availability unknown
+                {visiblePlayers.map((p) => (
+                  <button
+                    className="player-card"
+                    key={p.id}
+                    onClick={() => setSelectedPlayer(p)}
+                  >
+                    <div className="player-art">
+                      <span>{p.number ?? '—'}</span>
+                      <Shield size={40} strokeWidth={1} />
+                    </div>
+                    <div className="player-info">
+                      <span className="eyebrow">{p.position}</span>
+                      <h2>{p.name}</h2>
+                      <span className="status-pill">Availability unknown</span>
+                      <div className="player-stats">
+                        <span>
+                          <strong>{p.appearances ?? '—'}</strong>Apps
                         </span>
-                        <div className="player-stats">
-                          <span>
-                            <strong>{p.appearances}</strong>Apps
-                          </span>
-                          <span>
-                            <strong>{p.goals}</strong>Goals
-                          </span>
-                          <span>
-                            <strong>{p.assists}</strong>Assists
-                          </span>
-                        </div>
+                        <span>
+                          <strong>{p.goals ?? '—'}</strong>Goals
+                        </span>
+                        <span>
+                          <strong>{p.assists ?? '—'}</strong>Assists
+                        </span>
                       </div>
-                    </button>
-                  ))}
+                    </div>
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -663,14 +872,39 @@ export default function FanApp() {
                 <span className="status-pill">
                   Automatic alerts: not connected
                 </span>
+                <h3 className="preview-heading">Your reminder preview</h3>
+                <p>
+                  {isDemo
+                    ? 'Illustrative timings only. Nothing is scheduled.'
+                    : 'Planned timings only. Nothing is scheduled.'}
+                </p>
+                {reminderPreview.length ? (
+                  reminderPreview.map((r) => (
+                    <div className="preview-row" key={r.fixtureId + r.kind}>
+                      <strong>{r.opponent}</strong>
+                      <small>
+                        {r.kind === 'match-day'
+                          ? 'Match-day'
+                          : 'Before kickoff'}{' '}
+                        · {when(r.at, zone)}
+                      </small>
+                    </div>
+                  ))
+                ) : (
+                  <p>No future reminders with these settings.</p>
+                )}
+                <p className="feed-meta">
+                  Morning reminders are at 09:00 local time, only when more than
+                  an hour remains. Lineup alerts need the confirmed lineup feed.
+                </p>
               </aside>
             </div>
           )}
           <footer>
             <span>Made for the culers.</span>
             <span>
-              Independent fan project <span className="footer-dot">•</span> Demo
-              preview
+              Independent fan project <span className="footer-dot">•</span>{' '}
+              {isDemo ? 'Demo preview' : 'Football companion'}
             </span>
           </footer>
         </main>
@@ -690,7 +924,8 @@ export default function FanApp() {
           <X />
         </button>
         <p className="eyebrow">
-          DEMO {selectedMatch ? 'MATCH CENTRE' : 'PLAYER PROFILE'}
+          {isDemo ? 'DEMO ' : ''}
+          {selectedMatch ? 'MATCH CENTRE' : 'PLAYER PROFILE'}
         </p>
         <h2 id="detail-title">
           {selectedMatch
@@ -712,6 +947,31 @@ export default function FanApp() {
                   : `${selectedMatch.score[0]} – ${selectedMatch.score[1]}`}
               </p>
             )}
+            <div className="detail-actions">
+              <span className="status-pill">{selectedMatch.status}</span>
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  void shareDetails();
+                }}
+              >
+                Copy match link
+              </button>
+              <button
+                className="secondary-button"
+                disabled={
+                  selectedMatch.status !== 'scheduled' ||
+                  !selectedMatch.kickoff ||
+                  !!feed?.stale ||
+                  !!feedError
+                }
+                onClick={() => {
+                  void downloadCalendar(selectedMatch.id);
+                }}
+              >
+                {isDemo ? 'Download demo event' : 'Add to calendar'}
+              </button>
+            </div>
             <div className="detail-empty">
               <Users />
               <h3>Lineup not available</h3>
@@ -728,8 +988,31 @@ export default function FanApp() {
                 #{selectedPlayer.number} · {selectedPlayer.position} ·{' '}
                 {selectedPlayer.nationality}
               </p>
-              <span className="status-pill">Availability unknown</span>
+              <span className="status-pill">
+                {selectedPlayer.availability === 'Unknown'
+                  ? 'Availability unknown'
+                  : selectedPlayer.availability}
+              </span>
               <p>Live availability has not been connected.</p>
+              <div className="detail-actions">
+                <button
+                  className="secondary-button"
+                  aria-pressed={favourites.includes(selectedPlayer.id)}
+                  onClick={() => toggleFavourite(selectedPlayer.id)}
+                >
+                  {favourites.includes(selectedPlayer.id)
+                    ? '★ Favourite player'
+                    : '☆ Add to favourites'}
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    void shareDetails();
+                  }}
+                >
+                  Copy player link
+                </button>
+              </div>
               <div className="player-stats detail-stats">
                 {[
                   [selectedPlayer.appearances, 'Appearances'],
@@ -744,11 +1027,14 @@ export default function FanApp() {
                 ))}
               </div>
               <p className="muted">
-                Illustrative season statistics, not live player data.
+                {isDemo
+                  ? 'Illustrative season statistics, not live player data.'
+                  : 'Player statistics and availability are not yet connected. Missing values are not zero.'}
               </p>
             </>
           )
         )}
+        <output className="action-message">{actionMessage}</output>
         <a
           className="text-link"
           href={selectedMatch ? officialLinks[1].url : officialLinks[0].url}

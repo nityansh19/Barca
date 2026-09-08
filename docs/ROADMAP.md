@@ -6,6 +6,10 @@ Web and mobile demo screens, shared models, preferences, test notifications, sam
 
 ## 2. Live football data
 
+**v0.2 implemented:** shared dashboard API and clients, a provider adapter for fixtures/current squad, a durable D1 cache with quota-conscious refresh leases, null-safe missing statistics, source/freshness labels, and tests. The app remains in demo mode until a key is configured and provider coverage is checked. Search, device-local favourites, web share links, calendar export and reminder previews are also implemented.
+
+**Still required:** live provider-account validation, player-statistics endpoints, injury/availability sources, confirmed lineups and faster match-day refresh. The following list is the broader target; the implemented portion above is not a claim that all capabilities are connected.
+
 - Select a provider after testing Barcelona fixtures, player statistics, injuries and confirmed lineups across La Liga, Champions League and domestic cups. Include friendlies only where coverage exists.
 - Keep provider secrets on the server. Filter upstream data by a verified Barcelona team ID.
 - Introduce a normalized provider adapter and durable cached records with source, provider ID, fetched-at timestamp and data freshness.
