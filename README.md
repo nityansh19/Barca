@@ -2,6 +2,8 @@
 
 An independent FC Barcelona fan companion for the web, Android and iOS. Not affiliated with FC Barcelona.
 
+Public website: [Barça Fan Companion](https://barca-fan-companion.nityansh-bahadur1905.chatgpt.site). The public API is hosted at the same origin. GitHub stores source code; pushing a commit does not automatically deploy a new Sites version.
+
 ## Current milestone: v0.2 — connected data layer and fan tools
 
 - Web dashboard loads a shared API with loading, retry and stale-data states.
@@ -34,10 +36,13 @@ Use Node 24 LTS and npm (the checked-in lockfiles are authoritative).
 
 ```sh
 npm ci
+npm run setup
 npm run dev
 ```
 
 Open the local URL printed by the server. Web source is at the repository root; the Sites starter uses React, TypeScript and Vinext with a Cloudflare-compatible server build.
+
+The setup command creates ignored local environment files without overwriting existing values. Mobile is configured to read the public hosted backend. Run setup from the repository root before starting mobile. API credentials are never included; the app remains usable with clearly labelled demo data until a provider key is configured.
 
 ```sh
 npm run test

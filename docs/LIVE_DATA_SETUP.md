@@ -19,7 +19,7 @@ The current adapter resolves Barcelona's provider ID by exact club name and coun
 
 `mobile/.env.example` documents the optional `EXPO_PUBLIC_API_URL`. Without an origin, mobile uses labelled built-in sample data. With an origin, it reads `/api/dashboard` and displays failures without replacing them with samples.
 
-The origin must be reachable from the device. An owner-private Sites URL requires browser sign-in and is not automatically a public mobile API. Use a reachable development origin for native testing; plan the authenticated/public API audience before mobile distribution. Never embed Sites access tokens into the app.
+The current backend is public at `https://barca-fan-companion.nityansh-bahadur1905.chatgpt.site`. Run `npm run setup` from the repository root to create a mobile `.env` pointing to that origin. Existing environment files are preserved; update `EXPO_PUBLIC_API_URL` manually if you already have one. Restart Expo after changing it. This connects mobile to the shared backend, which still returns labelled demo data until the server's provider secret is configured. Never embed Sites access tokens or API-Football keys into the app.
 
 ## Notifications and calendar exports
 
