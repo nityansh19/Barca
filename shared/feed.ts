@@ -9,6 +9,8 @@ export type DashboardFeed = {
   players: Player[];
   notices: string[];
 };
+const MINUTE = 60000;
+const HOUR = 60 * MINUTE;
 export function seasonFor(date: Date) {
   return date.getUTCFullYear() - (date.getUTCMonth() < 6 ? 1 : 0);
 }
@@ -18,6 +20,26 @@ export function sortedFixtures(fixtures: Fixture[]) {
       (a.kickoff ? Date.parse(a.kickoff) : Infinity) -
       (b.kickoff ? Date.parse(b.kickoff) : Infinity),
   );
+}
+export function liveFixtureCandidate(
+  fixtures: Fixture[],
+  now = Date.now(),
+): Fixture | undefined {
+  return fixtures.find((fixture) => {
+    if (fixture.status === 'live' || fixture.status === 'interrupted')
+      return true;
+    if (
+      !fixture.kickoff ||
+      ['finished', 'cancelled', 'postponed'].includes(fixture.status)
+    )
+      return false;
+    const kickoff = Date.parse(fixture.kickoff);
+    return (
+      Number.isFinite(kickoff) &&
+      now >= kickoff - 10 * MINUTE &&
+      now <= kickoff + 4 * HOUR
+    );
+  });
 }
 export function searchText(value: string) {
   return value

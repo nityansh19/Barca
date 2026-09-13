@@ -1,7 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { demoFixtures, demoPlayers } from '../shared/demo';
-import type { Fixture } from '../shared/domain';
-import { seasonFor, type DashboardFeed } from '../shared/feed';
+import {
+  liveFixtureCandidate,
+  seasonFor,
+  type DashboardFeed,
+} from '../shared/feed';
 import {
   fetchFixtureUpdate,
   fetchLiveDashboard,
@@ -15,28 +18,6 @@ type Runtime = {
   FOOTBALL_DATA_MODE?: string;
   FOOTBALL_SEASON?: string;
 };
-const MINUTE = 60000;
-const HOUR = 60 * MINUTE;
-export function liveFixtureCandidate(
-  fixtures: Fixture[],
-  now = Date.now(),
-): Fixture | undefined {
-  return fixtures.find((fixture) => {
-    if (fixture.status === 'live' || fixture.status === 'interrupted')
-      return true;
-    if (
-      !fixture.kickoff ||
-      ['finished', 'cancelled', 'postponed'].includes(fixture.status)
-    )
-      return false;
-    const kickoff = Date.parse(fixture.kickoff);
-    return (
-      Number.isFinite(kickoff) &&
-      now >= kickoff - 10 * MINUTE &&
-      now <= kickoff + 4 * HOUR
-    );
-  });
-}
 export async function getDashboard(): Promise<DashboardFeed> {
   const runtime = env as Runtime;
   if (
