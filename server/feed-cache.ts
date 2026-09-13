@@ -1,148 +1,152 @@
+import { getCache } from '@vercel/functions';
 import type { Fixture } from '../shared/domain.ts';
 import type { DashboardFeed } from '../shared/feed.ts';
-import { FeedError } from './api-football.ts';
-type Cached = {
-  payload: string | null;
-  updated_at: number;
-  retry_after: number;
+
+export type CacheStore = {
+  get(key: string): Promise<unknown>;
+  set(
+    key: string,
+    value: unknown,
+    options: { ttl: number },
+  ): Promise<unknown>;
 };
-const MINUTE = 60000;
-const HOUR = 60 * MINUTE;
-const BASE_TTL = 6 * HOUR;
-const MAX_BASE_AGE = 24 * HOUR;
-const LIVE_TTL = 2 * MINUTE;
-const LIVE_FINAL_TTL = 6 * HOUR;
-const MAX_LIVE_AGE = 15 * MINUTE;
+
+type MemoryRecord = {
+  value: unknown;
+  expiresAt: number;
+};
+
+const SECOND = 1000;
+const MINUTE_SECONDS = 60;
+const HOUR_SECONDS = 60 * MINUTE_SECONDS;
+export const BASE_TTL_SECONDS = 6 * HOUR_SECONDS;
+export const MAX_BASE_AGE_SECONDS = 24 * HOUR_SECONDS;
+export const LIVE_TTL_SECONDS = 3 * MINUTE_SECONDS;
+export const LIVE_FINAL_TTL_SECONDS = 6 * HOUR_SECONDS;
+export const MAX_LIVE_AGE_SECONDS = 15 * MINUTE_SECONDS;
+
 const finalStatuses: Fixture['status'][] = [
   'finished',
   'cancelled',
   'postponed',
 ];
-function stored(record: Cached | null, now: number): DashboardFeed | null {
-  if (!record?.payload || now - record.updated_at > MAX_BASE_AGE) return null;
-  try {
-    const data = JSON.parse(record.payload) as DashboardFeed;
-    return data.mode === 'live' &&
-      Array.isArray(data.fixtures) &&
-      Array.isArray(data.players)
-      ? { ...data, stale: now - record.updated_at >= BASE_TTL }
-      : null;
-  } catch {
-    return null;
+
+class LocalMemoryCache implements CacheStore {
+  private records = new Map<string, MemoryRecord>();
+
+  async get(key: string) {
+    const record = this.records.get(key);
+    if (!record) return null;
+    if (Date.now() >= record.expiresAt) {
+      this.records.delete(key);
+      return null;
+    }
+    return record.value;
+  }
+
+  async set(key: string, value: unknown, options: { ttl: number }) {
+    this.records.set(key, {
+      value,
+      expiresAt: Date.now() + options.ttl * SECOND,
+    });
   }
 }
-function storedFixture(
-  record: Cached | null,
-  now: number,
-): { fixture: Fixture; age: number } | null {
-  if (!record?.payload) return null;
-  try {
-    const fixture = JSON.parse(record.payload) as Fixture;
-    if (!fixture || typeof fixture.id !== 'string') return null;
-    return { fixture, age: now - record.updated_at };
-  } catch {
-    return null;
-  }
+
+const localCache = new LocalMemoryCache();
+const inflight = new Map<string, Promise<unknown>>();
+
+function runtimeCache(): CacheStore {
+  if (process.env.VERCEL) return getCache() as unknown as CacheStore;
+  return localCache;
 }
+
+function validDashboard(value: unknown): value is DashboardFeed {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as Partial<DashboardFeed>;
+  return (
+    data.mode === 'live' &&
+    Array.isArray(data.fixtures) &&
+    Array.isArray(data.players) &&
+    Array.isArray(data.notices)
+  );
+}
+
+function validFixture(value: unknown): value is Fixture {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    typeof (value as Partial<Fixture>).id === 'string'
+  );
+}
+
+async function loadOnce<T>(key: string, loader: () => Promise<T>): Promise<T> {
+  const existing = inflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const pending = loader().finally(() => inflight.delete(key));
+  inflight.set(key, pending);
+  return pending;
+}
+
 export async function cachedDashboard(
-  db: D1Database,
   season: number,
   loader: () => Promise<DashboardFeed>,
-  now = Date.now(),
+  store: CacheStore = runtimeCache(),
 ): Promise<DashboardFeed> {
-  const key = 'api-football:v2:' + season;
-  const record = await db
-    .prepare(
-      'SELECT payload, updated_at, retry_after FROM feed_cache WHERE key = ?',
-    )
-    .bind(key)
-    .first<Cached>();
-  const cached = stored(record, now);
-  if (cached && !cached.stale) return cached;
-  // Atomically claim an expired refresh lease. Concurrent requests cannot drain the provider quota.
-  const claim = await db
-    .prepare(
-      'INSERT INTO feed_cache (key,payload,updated_at,retry_after) VALUES (?,NULL,0,?) ON CONFLICT(key) DO UPDATE SET retry_after=excluded.retry_after WHERE feed_cache.retry_after <= ? RETURNING key',
-    )
-    .bind(key, now + MINUTE, now)
-    .first();
-  if (!claim) {
-    if (cached)
-      return {
-        ...cached,
-        stale: true,
-        notices: [
-          ...cached.notices,
-          'Showing the last saved feed while the provider refreshes.',
-        ],
-      };
-    throw new FeedError(
-      'The football feed is refreshing. Please try again in a minute.',
-    );
-  }
+  const prefix = `barca:api-football:dashboard:v3:${season}`;
+  const freshKey = `${prefix}:fresh`;
+  const staleKey = `${prefix}:stale`;
+  const cached = await store.get(freshKey);
+  if (validDashboard(cached)) return cached;
+
   try {
-    const fresh = await loader();
-    await db
-      .prepare(
-        'UPDATE feed_cache SET payload=?, updated_at=?, retry_after=0 WHERE key=?',
-      )
-      .bind(JSON.stringify(fresh), now, key)
-      .run();
+    const fresh = await loadOnce(freshKey, loader);
+    await Promise.all([
+      store.set(freshKey, fresh, { ttl: BASE_TTL_SECONDS }),
+      store.set(staleKey, fresh, { ttl: MAX_BASE_AGE_SECONDS }),
+    ]);
     return fresh;
   } catch (error) {
-    if (cached)
+    const stale = await store.get(staleKey);
+    if (validDashboard(stale)) {
       return {
-        ...cached,
+        ...stale,
         stale: true,
         notices: [
-          ...cached.notices,
+          ...stale.notices,
           'The provider is unavailable. Showing the last saved feed.',
         ],
       };
+    }
     throw error;
   }
 }
+
 export async function cachedLiveFixture(
-  db: D1Database,
   fixtureId: string,
   loader: () => Promise<Fixture>,
-  now = Date.now(),
+  store: CacheStore = runtimeCache(),
 ): Promise<Fixture> {
-  const key = 'api-football:live:v1:' + fixtureId;
-  const record = await db
-    .prepare(
-      'SELECT payload, updated_at, retry_after FROM feed_cache WHERE key = ?',
-    )
-    .bind(key)
-    .first<Cached>();
-  const cached = storedFixture(record, now);
-  if (cached) {
-    const ttl = finalStatuses.includes(cached.fixture.status)
-      ? LIVE_FINAL_TTL
-      : LIVE_TTL;
-    if (cached.age < ttl) return cached.fixture;
-  }
-  const claim = await db
-    .prepare(
-      'INSERT INTO feed_cache (key,payload,updated_at,retry_after) VALUES (?,NULL,0,?) ON CONFLICT(key) DO UPDATE SET retry_after=excluded.retry_after WHERE feed_cache.retry_after <= ? RETURNING key',
-    )
-    .bind(key, now + 15000, now)
-    .first();
-  if (!claim) {
-    if (cached) return cached.fixture;
-    throw new FeedError('The live fixture is refreshing.');
-  }
+  const prefix = `barca:api-football:live:v2:${fixtureId}`;
+  const freshKey = `${prefix}:fresh`;
+  const staleKey = `${prefix}:stale`;
+  const cached = await store.get(freshKey);
+  if (validFixture(cached)) return cached;
+
   try {
-    const fresh = await loader();
-    await db
-      .prepare(
-        'UPDATE feed_cache SET payload=?, updated_at=?, retry_after=0 WHERE key=?',
-      )
-      .bind(JSON.stringify(fresh), now, key)
-      .run();
+    const fresh = await loadOnce(freshKey, loader);
+    const isFinal = finalStatuses.includes(fresh.status);
+    await Promise.all([
+      store.set(freshKey, fresh, {
+        ttl: isFinal ? LIVE_FINAL_TTL_SECONDS : LIVE_TTL_SECONDS,
+      }),
+      store.set(staleKey, fresh, {
+        ttl: isFinal ? LIVE_FINAL_TTL_SECONDS : MAX_LIVE_AGE_SECONDS,
+      }),
+    ]);
     return fresh;
   } catch (error) {
-    if (cached && cached.age < MAX_LIVE_AGE) return cached.fixture;
+    const stale = await store.get(staleKey);
+    if (validFixture(stale)) return stale;
     throw error;
   }
 }

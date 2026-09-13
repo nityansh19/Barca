@@ -1,4 +1,3 @@
-import { env } from 'cloudflare:workers';
 import { demoFixtures, demoPlayers } from '../shared/demo';
 import {
   liveFixtureCandidate,
@@ -12,20 +11,20 @@ import {
 } from './api-football';
 import { cachedDashboard, cachedLiveFixture } from './feed-cache';
 
-type Runtime = {
-  DB?: D1Database;
-  API_FOOTBALL_KEY?: string;
-  FOOTBALL_DATA_MODE?: string;
-  FOOTBALL_SEASON?: string;
-};
+function configuredSeason() {
+  const raw = process.env.FOOTBALL_SEASON;
+  const season = raw ? Number(raw) : seasonFor(new Date());
+  if (!Number.isInteger(season) || season < 2000 || season > 2100)
+    throw new FeedError('The football season configuration is invalid.');
+  return season;
+}
+
 export async function getDashboard(): Promise<DashboardFeed> {
-  const runtime = env as Runtime;
-  if (
-    runtime.FOOTBALL_DATA_MODE &&
-    !['live', 'demo'].includes(runtime.FOOTBALL_DATA_MODE)
-  )
+  const mode = process.env.FOOTBALL_DATA_MODE ?? 'demo';
+  if (!['live', 'demo'].includes(mode))
     throw new FeedError('Unknown football data mode.');
-  if (runtime.FOOTBALL_DATA_MODE !== 'live')
+
+  if (mode !== 'live') {
     return {
       mode: 'demo',
       source: 'Illustrative sample data',
@@ -38,25 +37,24 @@ export async function getDashboard(): Promise<DashboardFeed> {
         'Demo fixtures and statistics are illustrative. Player availability is unverified.',
       ],
     };
-  if (!runtime.API_FOOTBALL_KEY)
+  }
+
+  const key = process.env.API_FOOTBALL_KEY;
+  if (!key)
     throw new FeedError(
       'Live data is selected, but the football API key has not been configured.',
     );
-  const db = runtime.DB;
-  if (!db) throw new FeedError('The football cache is not configured.');
-  const season = runtime.FOOTBALL_SEASON
-    ? Number(runtime.FOOTBALL_SEASON)
-    : seasonFor(new Date());
-  if (!Number.isInteger(season) || season < 2000 || season > 2100)
-    throw new FeedError('The football season configuration is invalid.');
-  const dashboard = await cachedDashboard(db, season, () =>
-    fetchLiveDashboard(runtime.API_FOOTBALL_KEY!, season),
+
+  const season = configuredSeason();
+  const dashboard = await cachedDashboard(season, () =>
+    fetchLiveDashboard(key, season),
   );
   const candidate = liveFixtureCandidate(dashboard.fixtures);
   if (!candidate) return dashboard;
+
   try {
-    const liveFixture = await cachedLiveFixture(db, candidate.id, () =>
-      fetchFixtureUpdate(runtime.API_FOOTBALL_KEY!, candidate),
+    const liveFixture = await cachedLiveFixture(candidate.id, () =>
+      fetchFixtureUpdate(key, candidate),
     );
     return {
       ...dashboard,
@@ -65,7 +63,7 @@ export async function getDashboard(): Promise<DashboardFeed> {
       ),
       notices: [
         ...dashboard.notices,
-        'Match-window score refresh is active. The free-tier profile checks the current fixture about every two minutes.',
+        'Match-window score refresh is active. The free-tier profile checks the current fixture about every three minutes.',
       ],
     };
   } catch {
@@ -78,12 +76,13 @@ export async function getDashboard(): Promise<DashboardFeed> {
     };
   }
 }
+
 export async function dashboardResponse(
   select: (feed: DashboardFeed) => unknown = (f) => f,
 ) {
   try {
     return Response.json(select(await getDashboard()), {
-      headers: { 'Cache-Control': 'no-store' },
+      headers: { 'Cache-Control': 'private, no-store' },
     });
   } catch (error) {
     return Response.json(
@@ -95,7 +94,10 @@ export async function dashboardResponse(
       },
       {
         status: 503,
-        headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
+        headers: {
+          'Cache-Control': 'private, no-store',
+          'Retry-After': '60',
+        },
       },
     );
   }

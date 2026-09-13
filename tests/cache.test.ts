@@ -1,13 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
-import { cachedDashboard, cachedLiveFixture } from '../server/feed-cache.ts';
+import {
+  BASE_TTL_SECONDS,
+  LIVE_FINAL_TTL_SECONDS,
+  LIVE_TTL_SECONDS,
+  MAX_BASE_AGE_SECONDS,
+  cachedDashboard,
+  cachedLiveFixture,
+  type CacheStore,
+} from '../server/feed-cache.ts';
 import type { Fixture } from '../shared/domain.ts';
 import type { DashboardFeed } from '../shared/feed.ts';
-const minute = 60000,
-  hour = 60 * minute,
-  now = Date.parse('2026-09-08T12:00:00Z');
+
+const now = Date.parse('2026-09-08T12:00:00Z');
 const feed: DashboardFeed = {
   mode: 'live',
   source: 'Test provider',
@@ -30,162 +35,136 @@ const liveFixture: Fixture = {
   score: [1, 0],
   minute: 20,
 };
-function setup() {
-  const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(
-    readFileSync(
-      new URL('../drizzle/0000_feed_cache.sql', import.meta.url),
-      'utf8',
-    ),
-  );
-  const db = {
-    prepare(sql: string) {
-      return {
-        bind(...values: (string | number | null)[]) {
-          return {
-            async first<T>() {
-              return (
-                (sqlite.prepare(sql).get(...values) as T | undefined) ?? null
-              );
-            },
-            async run() {
-              sqlite.prepare(sql).run(...values);
-              return {};
-            },
-          };
-        },
-      };
-    },
-  } as unknown as D1Database;
-  return { sqlite, db };
+
+type RecordValue = { value: unknown; expiresAt: number };
+class FakeCache implements CacheStore {
+  now = 0;
+  records = new Map<string, RecordValue>();
+
+  advance(seconds: number) {
+    this.now += seconds * 1000;
+  }
+
+  async get(key: string) {
+    const record = this.records.get(key);
+    if (!record) return null;
+    if (this.now >= record.expiresAt) {
+      this.records.delete(key);
+      return null;
+    }
+    return record.value;
+  }
+
+  async set(key: string, value: unknown, options: { ttl: number }) {
+    this.records.set(key, {
+      value,
+      expiresAt: this.now + options.ttl * 1000,
+    });
+  }
 }
-void test('cache reuses fresh data and keeps original freshness on failed refresh', async () => {
-  const { sqlite, db } = setup();
+
+void test('base cache reuses fresh data and falls back to saved data on provider failure', async () => {
+  const cache = new FakeCache();
   let calls = 0;
   const loader = async () => {
     calls++;
     return feed;
   };
-  try {
-    await cachedDashboard(db, 2026, loader, now);
-    await cachedDashboard(db, 2026, loader, now + 1000);
-    assert.equal(calls, 1);
-    const saved = await cachedDashboard(
-      db,
+  await cachedDashboard(2026, loader, cache);
+  await cachedDashboard(2026, loader, cache);
+  assert.equal(calls, 1);
+
+  cache.advance(BASE_TTL_SECONDS + 1);
+  const saved = await cachedDashboard(
+    2026,
+    async () => {
+      throw Error('provider offline');
+    },
+    cache,
+  );
+  assert.equal(saved.stale, true);
+  assert.equal(saved.fetchedAt, feed.fetchedAt);
+
+  cache.advance(MAX_BASE_AGE_SECONDS - BASE_TTL_SECONDS + 1);
+  await assert.rejects(
+    cachedDashboard(
       2026,
       async () => {
-        throw Error('provider offline');
+        throw Error('offline');
       },
-      now + 6 * hour,
-    );
-    assert.equal(saved.stale, true);
-    assert.equal(saved.fetchedAt, feed.fetchedAt);
-    await assert.rejects(
-      cachedDashboard(
-        db,
-        2026,
-        async () => {
-          throw Error('offline');
-        },
-        now + 25 * hour,
-      ),
-    );
-  } finally {
-    sqlite.close();
-  }
+      cache,
+    ),
+  );
 });
-void test('atomic refresh lease prevents duplicate provider calls', async () => {
-  const { sqlite, db } = setup();
-  let calls = 0;
-  try {
-    const results = await Promise.allSettled([
-      cachedDashboard(
-        db,
-        2026,
-        async () => {
-          calls++;
-          return feed;
-        },
-        now,
-      ),
-      cachedDashboard(
-        db,
-        2026,
-        async () => {
-          calls++;
-          return feed;
-        },
-        now,
-      ),
-    ]);
-    assert.equal(calls, 1);
-    assert.ok(results.some((r) => r.status === 'fulfilled'));
-  } finally {
-    sqlite.close();
-  }
+
+void test('cold provider failure does not replace live mode with demo records', async () => {
+  const cache = new FakeCache();
+  await assert.rejects(
+    cachedDashboard(
+      2026,
+      async () => {
+        throw Error('quota');
+      },
+      cache,
+    ),
+  );
 });
-void test('cold failure backs off without replacing real data with demo records', async () => {
-  const { sqlite, db } = setup();
+
+void test('concurrent base reads share one in-process provider request', async () => {
+  const cache = new FakeCache();
   let calls = 0;
   const loader = async () => {
     calls++;
-    throw Error('quota');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return feed;
   };
-  try {
-    await assert.rejects(cachedDashboard(db, 2026, loader, now));
-    await assert.rejects(cachedDashboard(db, 2026, loader, now + 1000));
-    assert.equal(calls, 1);
-    const data = await cachedDashboard(db, 2026, async () => feed, now + minute);
-    assert.equal(data.mode, 'live');
-  } finally {
-    sqlite.close();
-  }
+  const results = await Promise.all([
+    cachedDashboard(2026, loader, cache),
+    cachedDashboard(2026, loader, cache),
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(results.length, 2);
 });
-void test('live fixture cache refreshes at two minutes and keeps final scores stable', async () => {
-  const { sqlite, db } = setup();
+
+void test('live fixture cache refreshes every three minutes and holds final results', async () => {
+  const cache = new FakeCache();
   let calls = 0;
-  try {
-    const loader = async () => {
+  const loader = async () => {
+    calls++;
+    return liveFixture;
+  };
+
+  await cachedLiveFixture(liveFixture.id, loader, cache);
+  cache.advance(LIVE_TTL_SECONDS - 1);
+  await cachedLiveFixture(liveFixture.id, loader, cache);
+  assert.equal(calls, 1);
+
+  cache.advance(2);
+  await cachedLiveFixture(liveFixture.id, loader, cache);
+  assert.equal(calls, 2);
+
+  const finalFixture: Fixture = {
+    ...liveFixture,
+    id: 'final',
+    status: 'finished',
+    minute: undefined,
+  };
+  await cachedLiveFixture(
+    finalFixture.id,
+    async () => {
       calls++;
-      return liveFixture;
-    };
-    await cachedLiveFixture(db, liveFixture.id, loader, now);
-    await cachedLiveFixture(db, liveFixture.id, loader, now + minute);
-    assert.equal(calls, 1);
-    await cachedLiveFixture(db, liveFixture.id, loader, now + 2 * minute);
-    assert.equal(calls, 2);
-    const finalFixture = { ...liveFixture, status: 'finished' as const, minute: undefined };
-    await cachedLiveFixture(
-      db,
-      'final',
-      async () => {
-        calls++;
-        return { ...finalFixture, id: 'final' };
-      },
-      now,
-    );
-    await cachedLiveFixture(
-      db,
-      'final',
-      async () => {
-        calls++;
-        return { ...finalFixture, id: 'final' };
-      },
-      now + 5 * minute,
-    );
-    assert.equal(calls, 3);
-  } finally {
-    sqlite.close();
-  }
-});
-void test('cache reads use the primary-key index', () => {
-  const { sqlite } = setup();
-  try {
-    const plan = sqlite
-      .prepare('EXPLAIN QUERY PLAN SELECT payload FROM feed_cache WHERE key=?')
-      .all('key');
-    assert.match(JSON.stringify(plan), /USING INDEX/);
-  } finally {
-    sqlite.close();
-  }
+      return finalFixture;
+    },
+    cache,
+  );
+  cache.advance(LIVE_FINAL_TTL_SECONDS - 1);
+  await cachedLiveFixture(
+    finalFixture.id,
+    async () => {
+      calls++;
+      return finalFixture;
+    },
+    cache,
+  );
+  assert.equal(calls, 3);
 });

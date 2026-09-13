@@ -20,7 +20,7 @@ function pollDelay(feed: DashboardFeed | null) {
       now <= kickoff + 4 * 60 * MINUTE
     );
   });
-  return matchWindow ? 2 * MINUTE : 15 * MINUTE;
+  return matchWindow ? 3 * MINUTE : 15 * MINUTE;
 }
 export function useDashboard() {
   const [feed, setFeed] = useState<DashboardFeed | null>(null),
@@ -60,7 +60,7 @@ export function useDashboard() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    // Start the external fetch; every state update in refresh follows its awaited response.
+    // Start the external fetch; every state update happens after its awaited response.
     // eslint-disable-next-line react/react-compiler
     void refresh(controller.signal);
     return () => controller.abort();

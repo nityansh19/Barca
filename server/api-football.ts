@@ -132,6 +132,7 @@ export async function apiRequest(
       headers: { 'x-apisports-key': key },
       signal: AbortSignal.timeout(12000),
       redirect: 'error',
+      cache: 'no-store',
     });
   } catch {
     throw new FeedError('The football provider could not be reached.');
@@ -189,7 +190,6 @@ export async function fetchLiveDashboard(
   season: number,
   fetcher: typeof fetch = fetch,
 ): Promise<DashboardFeed> {
-  // Resolve the ID from the provider rather than assuming a hard-coded identifier.
   const teams = await apiRequest(
     key,
     'teams',
@@ -232,7 +232,7 @@ export async function fetchLiveDashboard(
     players: normalizeSquad(squad, teamId),
     notices: [
       'Schedule and squad are synced every six hours to protect the provider quota.',
-      'Around kickoff, the current Barça fixture score and status refresh about every two minutes. Detailed events, confirmed lineups, injuries and player statistics are not connected yet.',
+      'Around kickoff, the current Barça fixture score and status refresh about every three minutes. Detailed events, confirmed lineups, injuries and player statistics are not connected yet.',
     ],
   };
 }
