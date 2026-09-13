@@ -2,26 +2,33 @@
 
 The application works in explicit demo mode without an API key. Search, favourites, shared detail links, reminder previews and calendar downloads can be used immediately. Demo events are marked `[DEMO]` and never contain reminder alarms.
 
-## Enable API-Football
+## Deploy on Vercel
 
-1. Create an account at [API-Football](https://dashboard.api-football.com/) and check that its plan covers the desired season and Barcelona competitions. No provider subscription is purchased by this repository.
-2. Configure `API_FOOTBALL_KEY` as a **server secret** in Sites. Never place it in a browser, an `EXPO_PUBLIC_*` variable, a GitHub commit or chat.
-3. Set `FOOTBALL_DATA_MODE=live`. Optionally set `FOOTBALL_SEASON=2026`; an empty season uses the current July-to-June season.
-4. Publish the updated runtime configuration, then load `/api/dashboard`. Verify `mode`, `source`, `fetchedAt`, `stale`, fixtures and current squad membership before relying on the information.
+1. Import `nityansh19/Barca` into Vercel as a Next.js project from the `main` branch.
+2. Keep the root directory as `./`; Vercel can use the repository's normal `npm run build` command.
+3. Add `API_FOOTBALL_KEY` as an encrypted server environment variable. Never expose it through `NEXT_PUBLIC_*`, `EXPO_PUBLIC_*`, a GitHub commit or chat.
+4. Add `FOOTBALL_DATA_MODE=live` and `FOOTBALL_SEASON=2026` for the current 2026/27 season. If the season is omitted, the backend derives the July-to-June season automatically.
+5. Deploy, then open `/api/health` and `/api/dashboard`. The dashboard response should report `mode: "live"` and `source: "API-Football"` before the data is treated as connected.
 
-For local development only, copy `.env.example` to ignored `.env`, supply the key locally and apply the checked-in migration to the local D1 database. Hosted migrations are applied by Sites during publication. Generate future migrations with `npm run db:generate`; do not rewrite an applied migration.
+Use the same variables for Preview deployments if you want provider-backed preview builds. The API key is only read in the server runtime.
 
-The base adapter resolves Barcelona's provider ID by exact club name and country, then loads season fixtures and the current registered squad. Base schedule/squad data is cached for six hours to protect low API quotas. Three provider requests are needed per successful base refresh. Refreshing the UI reads the same cache instead of bypassing quota protection. An expired-cache lease prevents concurrent refreshes; provider failures back off for a minute. Saved base data can be shown for up to 24 hours with an explicit stale marker, after which the app reports unavailable. Live-mode errors never switch to demo records.
+## Caching and the free API plan
 
-During a match window (starting 10 minutes before scheduled kickoff and ending up to four hours after it), the backend refreshes the current fixture by fixture ID. That live fixture is cached for two minutes, so all web/mobile users share one upstream provider request rather than each draining quota independently. Once the provider reports a final/cancelled/postponed state, that result is held for six hours and repeated live polling stops. The web and mobile clients poll the shared backend every two minutes in a match window and every 15 minutes otherwise.
+The base adapter resolves Barcelona's provider ID by exact club name and country, then loads season fixtures and the current registered squad. Base schedule/squad data is stored in Vercel Runtime Cache for six hours. Three provider requests are needed per successful base refresh. A second 24-hour cache entry allows an explicitly stale feed to be shown if the provider temporarily fails. Live-mode errors never switch silently to demo records.
 
-The live fixture refresh currently updates match status, score and elapsed minute in the shared data model. Detailed event timelines (goals/cards/substitutions), confirmed lineups, injuries, return estimates and full player statistics remain unconnected. Those fields must stay unknown rather than being assigned fabricated zeroes or availability labels.
+During a match window (starting 10 minutes before scheduled kickoff and ending up to four hours after it), the backend refreshes the current fixture by fixture ID. The live fixture is shared through Vercel Runtime Cache for three minutes. This keeps the maximum full-window polling profile inside the API-Football free plan more safely than a two-minute interval. Once the provider reports a final/cancelled/postponed state, that result is cached for six hours. Web and mobile clients poll the shared backend every three minutes in a match window and every 15 minutes otherwise.
+
+The live fixture refresh currently updates match status, score and elapsed minute. Detailed event timelines (goals/cards/substitutions), confirmed lineups, injuries, return estimates and full player statistics remain unconnected. Those fields must stay unknown rather than being assigned fabricated values.
+
+## Local development
+
+Run `npm install`, then `npm run setup`. The setup command creates ignored `.env` and `mobile/.env` files from their examples without overwriting existing files. Set the web variables locally if you want provider-backed development; otherwise demo mode remains explicit.
+
+Outside Vercel, the server uses a process-local memory cache for development. The deployed application uses Vercel Runtime Cache so different users share provider results.
 
 ## Mobile backend origin
 
-`mobile/.env.example` documents the optional `EXPO_PUBLIC_API_URL`. Without an origin, mobile uses labelled built-in sample data. With an origin, it reads `/api/dashboard` and displays failures without replacing them with samples.
-
-The current backend is public at `https://barca-fan-companion.nityansh-bahadur1905.chatgpt.site`. Run `npm run setup` from the repository root to create a mobile `.env` pointing to that origin. Existing environment files are preserved; update `EXPO_PUBLIC_API_URL` manually if you already have one. Restart Expo after changing it. Never embed Sites access tokens or API-Football keys into the app.
+`mobile/.env.example` documents `EXPO_PUBLIC_API_URL`. Without an origin, mobile uses labelled built-in sample data. After Vercel deployment, set it to the public Vercel origin, for example `https://your-project.vercel.app`, then restart Expo. Never place the API-Football key in the mobile environment.
 
 ## Notifications and calendar exports
 

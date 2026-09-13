@@ -20,7 +20,7 @@ function pollDelay(feed: DashboardFeed | null) {
       now <= kickoff + 4 * 60 * MINUTE
     );
   });
-  return matchWindow ? 2 * MINUTE : 15 * MINUTE;
+  return matchWindow ? 3 * MINUTE : 15 * MINUTE;
 }
 export function useMobileFeed() {
   const [feed, setFeed] = useState<DashboardFeed | null>(null),

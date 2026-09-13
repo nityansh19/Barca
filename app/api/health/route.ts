@@ -1,14 +1,12 @@
-import { env } from 'cloudflare:workers';
+export const runtime = 'nodejs';
+
 export function GET() {
-  const runtime = env as {
-    FOOTBALL_DATA_MODE?: string;
-    API_FOOTBALL_KEY?: string;
-  };
   return Response.json({
     status: 'ok',
-    dataMode: runtime.FOOTBALL_DATA_MODE ?? 'demo',
-    providerConfigured: !!runtime.API_FOOTBALL_KEY,
+    dataMode: process.env.FOOTBALL_DATA_MODE ?? 'demo',
+    providerConfigured: !!process.env.API_FOOTBALL_KEY,
     scheduledNotifications: false,
-    version: '0.2.0',
+    version: '0.4.0',
+    platform: process.env.VERCEL ? 'vercel' : 'local',
   });
 }
