@@ -17,6 +17,37 @@ function num(value: unknown) {
 function rows(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
+function providerStatus(short: string): Fixture['status'] {
+  if (['FT', 'AET', 'PEN', 'AWD', 'WO'].includes(short)) return 'finished';
+  if (['1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE'].includes(short))
+    return 'live';
+  if (short === 'PST') return 'postponed';
+  if (short === 'CANC') return 'cancelled';
+  if (['SUSP', 'INT', 'ABD'].includes(short)) return 'interrupted';
+  if (['NS', 'TBD'].includes(short)) return 'scheduled';
+  return 'unknown';
+}
+function providerKickoff(fixture: Row, short: string) {
+  const date = str(fixture.date);
+  return short !== 'TBD' && date && Number.isFinite(Date.parse(date))
+    ? new Date(date).toISOString()
+    : null;
+}
+function providerScore(
+  status: Fixture['status'],
+  goals: Row,
+  isHome: boolean,
+): [number, number] | undefined {
+  const homeGoals = num(goals.home),
+    awayGoals = num(goals.away);
+  if (
+    !['finished', 'live', 'interrupted'].includes(status) ||
+    homeGoals === null ||
+    awayGoals === null
+  )
+    return undefined;
+  return isHome ? [homeGoals, awayGoals] : [awayGoals, homeGoals];
+}
 export class FeedError extends Error {}
 
 export function normalizeFixtures(input: unknown[], teamId: number): Fixture[] {
@@ -31,43 +62,13 @@ export function normalizeFixtures(input: unknown[], teamId: number): Fixture[] {
     const id = num(fixture.id);
     if (id === null) continue;
     const isHome = num(home.id) === teamId,
-      opponent = isHome ? away : home;
-    const short = str(row(fixture.status).short);
-    const status: Fixture['status'] = [
-      'FT',
-      'AET',
-      'PEN',
-      'AWD',
-      'WO',
-    ].includes(short)
-      ? 'finished'
-      : ['1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE'].includes(short)
-        ? 'live'
-        : short === 'PST'
-          ? 'postponed'
-          : short === 'CANC'
-            ? 'cancelled'
-            : ['SUSP', 'INT', 'ABD'].includes(short)
-              ? 'interrupted'
-              : ['NS', 'TBD'].includes(short)
-                ? 'scheduled'
-                : 'unknown';
-    const date = str(fixture.date);
-    const kickoff =
-      short !== 'TBD' && date && Number.isFinite(Date.parse(date))
-        ? new Date(date).toISOString()
-        : null;
-    const goals = row(r.goals),
-      homeGoals = num(goals.home),
-      awayGoals = num(goals.away);
-    const score: [number, number] | undefined =
-      ['finished', 'live', 'interrupted'].includes(status) &&
-      homeGoals !== null &&
-      awayGoals !== null
-        ? isHome
-          ? [homeGoals, awayGoals]
-          : [awayGoals, homeGoals]
-        : undefined;
+      opponent = isHome ? away : home,
+      statusRow = row(fixture.status),
+      short = str(statusRow.short),
+      status = providerStatus(short),
+      kickoff = providerKickoff(fixture, short),
+      score = providerScore(status, row(r.goals), isHome),
+      minute = num(statusRow.elapsed);
     unique.set(String(id), {
       id: String(id),
       opponent: str(opponent.name, 'Opponent TBC'),
@@ -81,6 +82,7 @@ export function normalizeFixtures(input: unknown[], teamId: number): Fixture[] {
       stadium: str(row(fixture.venue).name, 'Venue TBC'),
       status,
       ...(score ? { score } : {}),
+      ...(status === 'live' && minute !== null ? { minute } : {}),
     });
   }
   return sortedFixtures([...unique.values()]);
@@ -154,6 +156,34 @@ export async function apiRequest(
     );
   return data.response;
 }
+export async function fetchFixtureUpdate(
+  key: string,
+  base: Fixture,
+  fetcher: typeof fetch = fetch,
+): Promise<Fixture> {
+  const response = await apiRequest(key, 'fixtures', { id: base.id }, fetcher);
+  const match = response
+    .map(row)
+    .find((r) => String(num(row(r.fixture).id)) === base.id);
+  if (!match)
+    throw new FeedError('The provider did not return the current fixture.');
+  const fixture = row(match.fixture),
+    statusRow = row(fixture.status),
+    short = str(statusRow.short),
+    status = providerStatus(short),
+    score = providerScore(status, row(match.goals), base.home),
+    minute = num(statusRow.elapsed),
+    { score: _oldScore, minute: _oldMinute, ...rest } = base;
+  return {
+    ...rest,
+    kickoff: providerKickoff(fixture, short),
+    stadium: str(row(fixture.venue).name, base.stadium),
+    competition: str(row(match.league).name, base.competition),
+    status,
+    ...(score ? { score } : {}),
+    ...(status === 'live' && minute !== null ? { minute } : {}),
+  };
+}
 export async function fetchLiveDashboard(
   key: string,
   season: number,
@@ -201,8 +231,8 @@ export async function fetchLiveDashboard(
     fixtures: normalizeFixtures(fixtures, teamId),
     players: normalizeSquad(squad, teamId),
     notices: [
-      'Fixtures and squad are synced hourly. Live minute-by-minute scores are not enabled.',
-      'Player statistics, injuries and confirmed lineups are not connected yet. Missing information stays unknown.',
+      'Schedule and squad are synced every six hours to protect the provider quota.',
+      'Around kickoff, the current Barça fixture score and status refresh about every two minutes. Detailed events, confirmed lineups, injuries and player statistics are not connected yet.',
     ],
   };
 }
