@@ -11,8 +11,15 @@ import {
 } from './api-football';
 import { cachedDashboard, cachedLiveFixture } from './feed-cache';
 
+function configuredMode() {
+  const mode = (process.env.FOOTBALL_DATA_MODE ?? 'demo').trim().toLowerCase();
+  if (!['live', 'demo'].includes(mode))
+    throw new FeedError('Unknown football data mode.');
+  return mode as 'live' | 'demo';
+}
+
 function configuredSeason() {
-  const raw = process.env.FOOTBALL_SEASON;
+  const raw = process.env.FOOTBALL_SEASON?.trim();
   const season = raw ? Number(raw) : seasonFor(new Date());
   if (!Number.isInteger(season) || season < 2000 || season > 2100)
     throw new FeedError('The football season configuration is invalid.');
@@ -20,9 +27,7 @@ function configuredSeason() {
 }
 
 export async function getDashboard(): Promise<DashboardFeed> {
-  const mode = process.env.FOOTBALL_DATA_MODE ?? 'demo';
-  if (!['live', 'demo'].includes(mode))
-    throw new FeedError('Unknown football data mode.');
+  const mode = configuredMode();
 
   if (mode !== 'live') {
     return {
@@ -39,7 +44,7 @@ export async function getDashboard(): Promise<DashboardFeed> {
     };
   }
 
-  const key = process.env.API_FOOTBALL_KEY;
+  const key = process.env.API_FOOTBALL_KEY?.trim();
   if (!key)
     throw new FeedError(
       'Live data is selected, but the football API key has not been configured.',
