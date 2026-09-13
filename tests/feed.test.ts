@@ -4,8 +4,10 @@ import {
   normalizeFixtures,
   normalizeSquad,
   apiRequest,
+  fetchFixtureUpdate,
   fetchLiveDashboard,
 } from '../server/api-football.ts';
+import { liveFixtureCandidate } from '../server/dashboard.ts';
 import { filterFixtures, seasonFor } from '../shared/feed.ts';
 const record = (
   status = 'NS',
@@ -122,6 +124,37 @@ void test('full adapter resolves club identity and normalizes provider fixtures 
   assert.equal(result.fixtures.length, 1);
   assert.equal(result.players.length, 1);
   assert.deepEqual(calls, ['/teams', '/fixtures', '/players/squads']);
+});
+void test('single-fixture refresh updates live score and elapsed minute', async () => {
+  const base = normalizeFixtures([record()], 9)[0];
+  const live = {
+    ...record('2H'),
+    fixture: {
+      ...record('2H').fixture,
+      status: { short: '2H', elapsed: 73 },
+    },
+    goals: { home: 2, away: 3 },
+  };
+  const updated = await fetchFixtureUpdate('test-key', base, async () =>
+    Response.json({ errors: [], response: [live] }),
+  );
+  assert.equal(updated.status, 'live');
+  assert.equal(updated.minute, 73);
+  assert.deepEqual(updated.score, [3, 2]);
+});
+void test('match-window detection activates shortly before kickoff and ignores old finals', () => {
+  const base = normalizeFixtures([record()], 9)[0];
+  assert.equal(
+    liveFixtureCandidate([base], Date.parse('2026-09-12T18:55:00Z'))?.id,
+    base.id,
+  );
+  assert.equal(
+    liveFixtureCandidate(
+      [{ ...base, status: 'finished' }],
+      Date.parse('2026-09-12T19:30:00Z'),
+    ),
+    undefined,
+  );
 });
 void test('search is accent insensitive and results are reverse chronological', () => {
   const f = normalizeFixtures([record('FT')], 9)[0];

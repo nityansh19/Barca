@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { cachedDashboard } from '../server/feed-cache.ts';
+import { cachedDashboard, cachedLiveFixture } from '../server/feed-cache.ts';
+import type { Fixture } from '../shared/domain.ts';
 import type { DashboardFeed } from '../shared/feed.ts';
-const hour = 3600000,
+const minute = 60000,
+  hour = 60 * minute,
   now = Date.parse('2026-09-08T12:00:00Z');
 const feed: DashboardFeed = {
   mode: 'live',
@@ -15,6 +17,18 @@ const feed: DashboardFeed = {
   fixtures: [],
   players: [],
   notices: [],
+};
+const liveFixture: Fixture = {
+  id: '5',
+  opponent: 'Opponent',
+  code: 'OPP',
+  home: false,
+  competition: 'League',
+  kickoff: new Date(now).toISOString(),
+  stadium: 'Ground',
+  status: 'live',
+  score: [1, 0],
+  minute: 20,
 };
 function setup() {
   const sqlite = new DatabaseSync(':memory:');
@@ -62,7 +76,7 @@ void test('cache reuses fresh data and keeps original freshness on failed refres
       async () => {
         throw Error('provider offline');
       },
-      now + hour,
+      now + 6 * hour,
     );
     assert.equal(saved.stale, true);
     assert.equal(saved.fetchedAt, feed.fetchedAt);
@@ -121,8 +135,45 @@ void test('cold failure backs off without replacing real data with demo records'
     await assert.rejects(cachedDashboard(db, 2026, loader, now));
     await assert.rejects(cachedDashboard(db, 2026, loader, now + 1000));
     assert.equal(calls, 1);
-    const data = await cachedDashboard(db, 2026, async () => feed, now + 60000);
+    const data = await cachedDashboard(db, 2026, async () => feed, now + minute);
     assert.equal(data.mode, 'live');
+  } finally {
+    sqlite.close();
+  }
+});
+void test('live fixture cache refreshes at two minutes and keeps final scores stable', async () => {
+  const { sqlite, db } = setup();
+  let calls = 0;
+  try {
+    const loader = async () => {
+      calls++;
+      return liveFixture;
+    };
+    await cachedLiveFixture(db, liveFixture.id, loader, now);
+    await cachedLiveFixture(db, liveFixture.id, loader, now + minute);
+    assert.equal(calls, 1);
+    await cachedLiveFixture(db, liveFixture.id, loader, now + 2 * minute);
+    assert.equal(calls, 2);
+    const finalFixture = { ...liveFixture, status: 'finished' as const, minute: undefined };
+    await cachedLiveFixture(
+      db,
+      'final',
+      async () => {
+        calls++;
+        return { ...finalFixture, id: 'final' };
+      },
+      now,
+    );
+    await cachedLiveFixture(
+      db,
+      'final',
+      async () => {
+        calls++;
+        return { ...finalFixture, id: 'final' };
+      },
+      now + 5 * minute,
+    );
+    assert.equal(calls, 3);
   } finally {
     sqlite.close();
   }

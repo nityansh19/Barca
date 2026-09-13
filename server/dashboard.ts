@@ -1,8 +1,13 @@
 import { env } from 'cloudflare:workers';
 import { demoFixtures, demoPlayers } from '../shared/demo';
+import type { Fixture } from '../shared/domain';
 import { seasonFor, type DashboardFeed } from '../shared/feed';
-import { fetchLiveDashboard, FeedError } from './api-football';
-import { cachedDashboard } from './feed-cache';
+import {
+  fetchFixtureUpdate,
+  fetchLiveDashboard,
+  FeedError,
+} from './api-football';
+import { cachedDashboard, cachedLiveFixture } from './feed-cache';
 
 type Runtime = {
   DB?: D1Database;
@@ -10,6 +15,28 @@ type Runtime = {
   FOOTBALL_DATA_MODE?: string;
   FOOTBALL_SEASON?: string;
 };
+const MINUTE = 60000;
+const HOUR = 60 * MINUTE;
+export function liveFixtureCandidate(
+  fixtures: Fixture[],
+  now = Date.now(),
+): Fixture | undefined {
+  return fixtures.find((fixture) => {
+    if (fixture.status === 'live' || fixture.status === 'interrupted')
+      return true;
+    if (
+      !fixture.kickoff ||
+      ['finished', 'cancelled', 'postponed'].includes(fixture.status)
+    )
+      return false;
+    const kickoff = Date.parse(fixture.kickoff);
+    return (
+      Number.isFinite(kickoff) &&
+      now >= kickoff - 10 * MINUTE &&
+      now <= kickoff + 4 * HOUR
+    );
+  });
+}
 export async function getDashboard(): Promise<DashboardFeed> {
   const runtime = env as Runtime;
   if (
@@ -41,9 +68,34 @@ export async function getDashboard(): Promise<DashboardFeed> {
     : seasonFor(new Date());
   if (!Number.isInteger(season) || season < 2000 || season > 2100)
     throw new FeedError('The football season configuration is invalid.');
-  return cachedDashboard(db, season, () =>
+  const dashboard = await cachedDashboard(db, season, () =>
     fetchLiveDashboard(runtime.API_FOOTBALL_KEY!, season),
   );
+  const candidate = liveFixtureCandidate(dashboard.fixtures);
+  if (!candidate) return dashboard;
+  try {
+    const liveFixture = await cachedLiveFixture(db, candidate.id, () =>
+      fetchFixtureUpdate(runtime.API_FOOTBALL_KEY!, candidate),
+    );
+    return {
+      ...dashboard,
+      fixtures: dashboard.fixtures.map((fixture) =>
+        fixture.id === liveFixture.id ? liveFixture : fixture,
+      ),
+      notices: [
+        ...dashboard.notices,
+        'Match-window score refresh is active. The free-tier profile checks the current fixture about every two minutes.',
+      ],
+    };
+  } catch {
+    return {
+      ...dashboard,
+      notices: [
+        ...dashboard.notices,
+        'The live score refresh is temporarily unavailable; schedule and squad data remain available.',
+      ],
+    };
+  }
 }
 export async function dashboardResponse(
   select: (feed: DashboardFeed) => unknown = (f) => f,

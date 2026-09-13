@@ -15,6 +15,7 @@ export type Fixture = {
     | 'interrupted'
     | 'unknown';
   score?: [number, number];
+  minute?: number;
 };
 export type Player = {
   id: string;
