@@ -17,6 +17,22 @@ function num(value: unknown) {
 function rows(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
+function providerErrorDetail(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string' && !!item.trim())
+      .map((item) => item.trim())
+      .join('; ');
+  }
+  return Object.entries(row(value))
+    .map(([name, message]) =>
+      typeof message === 'string' && message.trim()
+        ? `${name}: ${message.trim()}`
+        : '',
+    )
+    .filter(Boolean)
+    .join('; ');
+}
 function providerStatus(short: string): Fixture['status'] {
   if (['FT', 'AET', 'PEN', 'AWD', 'WO'].includes(short)) return 'finished';
   if (['1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE'].includes(short))
@@ -139,7 +155,7 @@ export async function apiRequest(
   }
   if (!response.ok)
     throw new FeedError(
-      'The football provider is unavailable or its quota has been reached.',
+      `API-Football ${endpoint} returned HTTP ${response.status}. The provider may be unavailable or the request quota may be exhausted.`,
     );
   let data: Row;
   try {
@@ -147,14 +163,13 @@ export async function apiRequest(
   } catch {
     throw new FeedError('The football provider returned an invalid response.');
   }
-  if (
-    !Array.isArray(data.response) ||
-    Object.keys(row(data.errors)).length ||
-    (Array.isArray(data.errors) && data.errors.length)
-  )
-    throw new FeedError(
-      'The football provider rejected the request. Check the API plan and season coverage.',
-    );
+  const providerError = providerErrorDetail(data.errors);
+  if (!Array.isArray(data.response) || providerError) {
+    const safeDetail = providerError
+      ? providerError.split(key).join('[redacted]').slice(0, 400)
+      : 'The provider response did not contain a valid response array.';
+    throw new FeedError(`API-Football ${endpoint}: ${safeDetail}`);
+  }
   return data.response;
 }
 export async function fetchFixtureUpdate(
