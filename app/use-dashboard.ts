@@ -60,6 +60,8 @@ export function useDashboard() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
+    // Start the external fetch; every state update happens after its awaited response.
+    // eslint-disable-next-line react/react-compiler
     void refresh(controller.signal);
     return () => controller.abort();
   }, [refresh]);
