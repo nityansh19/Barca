@@ -1,70 +1,61 @@
 # Barca
 
-An independent FC Barcelona fan companion for the web, Android and iOS. Not affiliated with FC Barcelona.
+An independent FC Barcelona fan companion for web, Android, and iOS. It is not affiliated with FC Barcelona.
 
-## Current milestone: v0.4 — Vercel-native live provider data
+## Current milestone
 
-- Native Next.js web application ready for Vercel Git deployments.
-- API-Football-backed Barça schedule, results and current squad when server credentials are configured.
-- Vercel Runtime Cache: six-hour schedule/squad cache plus shared three-minute match-window score/status refresh.
-- Explicit stale-data fallback without silently replacing provider failures with demo data.
-- Accent-insensitive fixture/player search, competition filters and newest-first results.
-- Favourite players saved per device on web and mobile.
-- Shareable web match/player links and calendar downloads.
-- Local-time reminder preview with daylight-saving handling; no scheduled delivery yet.
-- Automated tests cover provider normalization, runtime-cache behavior, calendar encoding and reminder timing.
+**v0.4 — Vercel-native live provider data**
 
-See [live-data setup](docs/LIVE_DATA_SETUP.md) for the Vercel environment variables and remaining limitations.
+The project supports live schedule, results, and squad data through API-Football when server credentials are configured. Without live credentials, the application stays explicit about demo/stale data instead of pretending provider data is current.
 
-### Foundation retained
+## What the app includes
 
-- Responsive web dashboard with countdown and local kickoff times.
-- Fixtures/results with competition filters and match detail dialogs.
-- Player profiles, position filters and unknown-safe statistics.
-- Official club source links, without republishing news articles.
-- Device-local reminder preferences, spoiler-free mode and browser notification test.
-- Expo mobile app with Home, Matches, Squad, Updates, Reminders, player profiles, persistent preferences and a notification test.
-- Shared football models and labelled sample data.
+### Match experience
 
-**The deployed app remains in demo mode until the server has `API_FOOTBALL_KEY`, `FOOTBALL_DATA_MODE=live` and an optional `FOOTBALL_SEASON`.** Detailed event timelines, confirmed lineups, injuries, full player statistics, automatic push delivery and account sync are not implemented yet.
+- Barça fixtures and results
+- Local kickoff times and countdowns
+- Competition filters
+- Match detail dialogs
+- Shareable match links
+- Calendar downloads
+- Spoiler-free preference
 
-## Run the website
+### Squad experience
 
-Use Node 22 and npm.
+- Current squad feed when live mode is enabled
+- Position filters
+- Player search
+- Player profiles
+- Favourite players stored per device
+- Unknown-safe statistics
 
-```sh
-npm install
-npm run setup
-npm run dev
-```
+### Data and reliability
 
-`npm run setup` creates ignored `.env` files from the checked-in examples without overwriting your local values. No API credential belongs in GitHub.
+- API-Football provider integration
+- Vercel Runtime Cache
+- Six-hour schedule/squad cache
+- Short match-window score/status refresh
+- Explicit stale-data fallback
+- Provider normalization tests
+- Cache and calendar behavior tests
 
-Validate before deployment:
+### Mobile companion
 
-```sh
-npm test
-npm run typecheck
-npm run lint
-npm run build
-```
+The Expo application includes Home, Matches, Squad, Updates, Reminders, player profiles, persistent preferences, and notification testing.
 
-## Deploy the website on Vercel
-
-Import this repository into Vercel and use the `main` branch. Vercel should detect **Next.js** automatically.
-
-Recommended project settings:
+## Tech and platform structure
 
 ```text
-Framework Preset: Next.js
-Root Directory: ./
-Install Command: npm install
-Build Command: npm run build
-Output Directory: leave blank/default
-Node.js: 22.x
+app/        Next.js web interface and API routes
+shared/     Shared football types, defaults, and demo data
+server/     Provider adapter, caching, and reminder calculations
+mobile/     Expo Android/iOS application
+docs/       Architecture, live-data setup, and roadmap
 ```
 
-Add these server environment variables:
+## Live-data configuration
+
+The deployed app requires server-side configuration for live API-Football data:
 
 ```text
 API_FOOTBALL_KEY=<private provider key>
@@ -72,38 +63,79 @@ FOOTBALL_DATA_MODE=live
 FOOTBALL_SEASON=2026
 ```
 
-After deployment, check `/api/health` and `/api/dashboard`. The live dashboard should report `source: "API-Football"`. Future pushes to `main` can deploy automatically through Vercel's Git integration.
+Never expose the API-Football key in client code or commit it to GitHub.
+
+For the full provider setup and current limitations, see [`docs/LIVE_DATA_SETUP.md`](./docs/LIVE_DATA_SETUP.md).
+
+## Run the website
+
+Use Node.js 22 and npm.
+
+```bash
+npm install
+npm run setup
+npm run dev
+```
+
+`npm run setup` creates ignored environment files from the checked-in examples without overwriting local values.
+
+## Verify before deployment
+
+```bash
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
+
+## Deploy on Vercel
+
+Recommended settings:
+
+```text
+Framework Preset: Next.js
+Root Directory: ./
+Install Command: npm install
+Build Command: npm run build
+Output Directory: default
+Node.js: 22.x
+```
+
+After deployment, verify:
+
+- `/api/health`
+- `/api/dashboard`
+
+In live mode, the dashboard should identify `API-Football` as its source.
 
 ## Run the mobile app
 
-```sh
+```bash
 cd mobile
 npm ci
 npm start
 ```
 
-After the web deployment has a public URL, set `EXPO_PUBLIC_API_URL` in `mobile/.env` to that origin and restart Expo. The API-Football key stays server-side.
+After the web app has a public URL, set `EXPO_PUBLIC_API_URL` in `mobile/.env` to that origin and restart Expo. The provider API key remains server-side.
 
-```sh
-cd mobile
+Mobile validation:
+
+```bash
 npm run typecheck
 npx expo export --platform android --platform ios
 ```
 
-The mobile app has its own lockfile to preserve Expo's supported React/React Native versions.
+## Current limitations
 
-## Structure
+The following are intentionally not presented as complete yet:
 
-```text
-app/                  Next.js web interface and API routes
-shared/               Platform-independent types, defaults and demo dataset
-server/               API-Football adapter, Vercel cache and reminder calculation
-mobile/               Expo Android/iOS application
-docs/                 Architecture and implementation roadmap
-```
+- Detailed event timelines
+- Confirmed lineups
+- Injury feeds
+- Full player statistics
+- Automatic push delivery
+- Account-based preference sync
 
-API endpoints: `GET /api/health`, `GET /api/dashboard`, `GET /api/fixtures`, `GET /api/squad` and `GET /api/calendar`. Feed endpoints expose source, mode and freshness. The web UI consumes `/api/dashboard`; mobile consumes it when `EXPO_PUBLIC_API_URL` is configured.
+## Roadmap
 
-## Before a public launch
-
-See [the roadmap](docs/ROADMAP.md). Verify API-Football coverage in every Barça competition, connect detailed match events/lineups/player stats if required, configure durable subscriptions and a real push worker, complete native-device testing, and resolve dependency audit findings. No API keys or push-service credentials are included.
+See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for public-launch work, provider coverage checks, richer match data, push delivery, native-device testing, and dependency cleanup.
